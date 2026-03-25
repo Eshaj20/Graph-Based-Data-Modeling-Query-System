@@ -1,3 +1,12 @@
+---
+title: O2C Context Graph
+emoji: 📊
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 8000
+---
+
 # Order-to-Cash Context Graph
 
 A FastAPI-based context graph system for the SAP order-to-cash dataset. It ingests the full dataset into SQLite, builds graph nodes and relationships across business documents and master data, renders an exploratory graph UI, and exposes a guarded conversational interface for data-backed answers.
@@ -162,23 +171,32 @@ python validate_llm.py
 
 ## Deployment
 
-Two deployment helpers are included:
+The app is prepared for deployment as a Hugging Face Docker Space.
 
 - [Dockerfile](Dockerfile)
-- [render.yaml](render.yaml)
 
-Suggested Render flow:
+### Hugging Face Spaces
 
-1. Create a new Web Service from the repository.
-2. Render will detect `render.yaml`.
-3. Set any optional LLM API keys as environment variables.
-4. Deploy and verify the `/api/summary` endpoint and UI.
+This project can be deployed as a Docker Space for a no-card public demo path.
 
-The app uses:
+Suggested Hugging Face flow:
 
-```bash
-python -m uvicorn app:app --host 0.0.0.0 --port $PORT
-```
+1. Create a new Space on Hugging Face.
+2. Choose `Docker` as the SDK.
+3. Push this repository to the Space.
+4. In the Space settings, add secrets for:
+   - `LLM_PROVIDER`
+   - `GROQ_API_KEY`
+   - `GROQ_MODEL`
+5. Wait for the image build and startup to complete.
+6. Verify the public Space URL, `/api/summary`, and the chat UI.
+
+Notes:
+
+- The included `Dockerfile` already serves FastAPI on port `8000`.
+- The README metadata block at the top sets `sdk: docker` and `app_port: 8000`, which Hugging Face uses for the Space configuration.
+- The app rebuilds `data/o2c_graph.db` from the bundled dataset when needed, so first startup can take a little longer.
+- Real API keys should stay in Space secrets or local `.env`, never in `.env.example`.
 
 ## Submission Checklist
 
