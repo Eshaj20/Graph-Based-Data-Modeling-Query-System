@@ -788,6 +788,9 @@ class O2CRepository:
 class LLMClient:
     def __init__(self) -> None:
         self.provider = os.getenv("LLM_PROVIDER", "").lower().strip()
+        self.last_error: str | None = None
+        self.last_raw_response: str | None = None
+        self.last_content: str | None = None
 
     def available(self) -> bool:
         return bool(self.provider and self._api_key())
@@ -795,27 +798,100 @@ class LLMClient:
     def _api_key(self) -> str | None:
         return {"groq": os.getenv("GROQ_API_KEY"), "openrouter": os.getenv("OPENROUTER_API_KEY"), "gemini": os.getenv("GEMINI_API_KEY")}.get(self.provider)
 
+    @staticmethod
+    def _extract_sql_candidate(content: str | None) -> str | None:
+        if not content:
+            return None
+        text = content.strip()
+        if not text:
+            return None
+
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:sql|json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text).strip()
+
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict) and isinstance(parsed.get("sql"), str):
+                return parsed["sql"].strip()
+        except json.JSONDecodeError:
+            pass
+
+        json_match = re.search(r"\{[\s\S]*\}", text)
+        if json_match:
+            try:
+                parsed = json.loads(json_match.group(0))
+                if isinstance(parsed, dict) and isinstance(parsed.get("sql"), str):
+                    return parsed["sql"].strip()
+            except json.JSONDecodeError:
+                pass
+
+        sql_match = re.search(r"(?is)\bselect\b[\s\S]*", text)
+        if sql_match:
+            return sql_match.group(0).strip()
+        return text
+
     def generate_sql(self, prompt: str) -> str | None:
+        self.last_error = None
+        self.last_raw_response = None
+        self.last_content = None
         if not self.available():
+            self.last_error = "No provider or API key configured."
             return None
         if self.provider == "groq":
-            payload = {"model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip(), "messages": [{"role": "system", "content": "Return only a single SQL SELECT statement."}, {"role": "user", "content": prompt}], "temperature": 0.1}
+            payload = {
+                "model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip(),
+                "messages": [
+                    {"role": "system", "content": 'Return only JSON with one key: {"sql":"<single SQLite SELECT statement>"}.'},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.1,
+            }
             req = request.Request("https://api.groq.com/openai/v1/chat/completions", data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._api_key()}"})
         elif self.provider == "openrouter":
-            payload = {"model": os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free").strip(), "messages": [{"role": "system", "content": "Return only a single SQL SELECT statement."}, {"role": "user", "content": prompt}], "temperature": 0.1}
+            payload = {
+                "model": os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free").strip(),
+                "messages": [
+                    {"role": "system", "content": 'Return only JSON with one key: {"sql":"<single SQLite SELECT statement>"}.'},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.1,
+            }
             req = request.Request("https://openrouter.ai/api/v1/chat/completions", data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._api_key()}"})
         else:
             model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip()
-            payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.1}}
+            payload = {"contents": [{"parts": [{"text": 'Return only JSON with one key: {"sql":"<single SQLite SELECT statement>"}.\n' + prompt}]}], "generationConfig": {"temperature": 0.1}}
             req = request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self._api_key()}", data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
         try:
             with request.urlopen(req, timeout=30) as response:
-                body = json.loads(response.read().decode("utf-8"))
-        except (error.HTTPError, error.URLError, TimeoutError, json.JSONDecodeError, KeyError, IndexError, ValueError):
+                raw_body = response.read().decode("utf-8")
+                self.last_raw_response = raw_body
+                body = json.loads(raw_body)
+        except error.HTTPError as exc:
+            try:
+                self.last_error = f"HTTP {exc.code}: {exc.read().decode('utf-8')}"
+            except Exception:
+                self.last_error = f"HTTP {exc.code}"
+            return None
+        except error.URLError as exc:
+            self.last_error = f"URL error: {exc}"
+            return None
+        except (TimeoutError, json.JSONDecodeError, KeyError, IndexError, ValueError) as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
             return None
         if self.provider == "gemini":
-            return body.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
-        return body.get("choices", [{}])[0].get("message", {}).get("content")
+            content = body.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
+            self.last_content = content
+            candidate = self._extract_sql_candidate(content)
+            if not candidate:
+                self.last_error = "Gemini response did not contain a usable SQL candidate."
+            return candidate
+        content = body.get("choices", [{}])[0].get("message", {}).get("content")
+        self.last_content = content
+        candidate = self._extract_sql_candidate(content)
+        if not candidate:
+            self.last_error = "Model response did not contain a usable SQL candidate."
+        return candidate
 
 
 class QueryEngine:
@@ -858,6 +934,19 @@ class QueryEngine:
 
     def _reject(self, reason: str = "This system is designed to answer questions related to the provided SAP order-to-cash dataset only.") -> dict[str, Any]:
         return {"answer": reason, "sql": "-- rejected as out of domain", "rows": [], "highlights": [], "mode": "guardrail"}
+
+    @staticmethod
+    def _llm_debug_payload(llm: LLMClient) -> dict[str, Any]:
+        if os.getenv("LLM_DEBUG", "").strip() not in {"1", "true", "TRUE", "yes", "on"}:
+            return {}
+        payload: dict[str, Any] = {}
+        if llm.last_error:
+            payload["llm_error"] = llm.last_error
+        if llm.last_content:
+            payload["llm_content_preview"] = llm.last_content[:1000]
+        elif llm.last_raw_response:
+            payload["llm_raw_response_preview"] = llm.last_raw_response[:1000]
+        return payload
 
     def _sanitize_sql(self, sql: str) -> str | None:
         candidate = sql.strip().strip("`")
@@ -1065,14 +1154,20 @@ Request: {message}
 """
         sql = self.llm.generate_sql(prompt)
         if not sql:
-            return {"answer": "The configured LLM provider did not return a usable SQL query. Try rephrasing the request or use one of the built-in business questions.", "sql": "-- llm provider unavailable or returned no safe SQL", "rows": [], "highlights": [], "mode": "llm_fallback"}
+            response = {"answer": "The configured LLM provider did not return a usable SQL query. Try rephrasing the request or use one of the built-in business questions.", "sql": "-- llm provider unavailable or returned no safe SQL", "rows": [], "highlights": [], "mode": "llm_fallback"}
+            response.update(self._llm_debug_payload(self.llm))
+            return response
         sql = self._sanitize_sql(sql)
         if not sql:
-            return {"answer": "The LLM response was rejected by SQL safety checks. Try a narrower question about the dataset entities and flows.", "sql": "-- llm sql rejected by safety checks", "rows": [], "highlights": [], "mode": "llm_fallback"}
+            response = {"answer": "The LLM response was rejected by SQL safety checks. Try a narrower question about the dataset entities and flows.", "sql": "-- llm sql rejected by safety checks", "rows": [], "highlights": [], "mode": "llm_fallback"}
+            response.update(self._llm_debug_payload(self.llm))
+            return response
         try:
             rows = self.repo.execute_sql(sql)
         except sqlite3.Error:
-            return {"answer": "The LLM generated a query that SQLite could not execute for this dataset. Try rephrasing the request.", "sql": sql, "rows": [], "highlights": [], "mode": "llm_fallback"}
+            response = {"answer": "The LLM generated a query that SQLite could not execute for this dataset. Try rephrasing the request.", "sql": sql, "rows": [], "highlights": [], "mode": "llm_fallback"}
+            response.update(self._llm_debug_payload(self.llm))
+            return response
         return {"answer": self._summarize_rows(rows), "sql": sql, "rows": rows, "highlights": [], "mode": "llm"}
 
 
