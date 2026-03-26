@@ -204,4 +204,3 @@ Notes:
 - Push the code to a public GitHub repository
 - Include AI session logs or transcripts
 - Include this README with architecture, database, prompting, and guardrails documented
-- Include [AI_SESSION_LOG.md](AI_SESSION_LOG.md) in the submission bundle
