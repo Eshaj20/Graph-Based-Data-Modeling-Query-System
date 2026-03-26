@@ -11,11 +11,22 @@ app_port: 8000
 
 A FastAPI-based context graph system for the SAP order-to-cash dataset. It ingests the full dataset into SQLite, builds graph nodes and relationships across business documents and master data, renders an exploratory graph UI, and exposes a guarded conversational interface for data-backed answers.
 
+## Links
+
+- Live demo: [https://jesha2-o2c-context-graph.hf.space/](https://jesha2-o2c-context-graph.hf.space/)
+- Public GitHub repository: add your repository URL here before submission
+
+## Repository Layout
+
+- `src/` contains the FastAPI app and frontend assets
+- `sessions/` contains AI coding session logs / transcripts
+- `README.md` contains setup, architecture, prompting, and deployment notes
+
 ## Architecture
 
-- Backend: FastAPI in [app.py](app.py)
+- Backend: FastAPI in [src/app.py](src/app.py)
 - Storage: SQLite at `data/o2c_graph.db`
-- Frontend: plain HTML, CSS, and JavaScript in [static/index.html](static/index.html)
+- Frontend: plain HTML, CSS, and JavaScript in [src/static/index.html](src/static/index.html)
 - Query layer:
   - deterministic handlers for the core assignment questions
   - optional LLM-to-SQL path using free-tier Groq, OpenRouter, or Gemini keys
@@ -104,6 +115,8 @@ The app uses a two-layer query approach:
 1. Deterministic query handlers for high-value assignment questions.
 2. Optional LLM-to-SQL generation for broader natural language questions.
 
+The required benchmark questions are intentionally covered by deterministic handlers for reliability. For broader in-domain questions, the app can call a free-tier LLM provider and translate natural language into a SQL query, then run that query only after SQL safety validation passes. If the provider rejects the request or does not return usable SQL, the system fails safely with an `llm_fallback` response instead of inventing an answer.
+
 The LLM prompt includes:
 
 - the allowed SQLite tables
@@ -157,11 +170,13 @@ This validates:
 
 See [.env.example](.env.example) for supported free-tier providers:
 
-- Groq
 - OpenRouter
+- Groq
 - Gemini
 
 If no API key is present, the app still works through deterministic grounded queries.
+
+In testing, the OpenRouter path successfully reached the provider but could hit temporary upstream rate limits on free models. The application handles that safely via `llm_fallback`, while the required benchmark questions remain covered by deterministic grounded queries.
 
 To validate the live LLM path after setting a key:
 
@@ -186,8 +201,8 @@ Suggested Hugging Face flow:
 3. Push this repository to the Space.
 4. In the Space settings, add secrets for:
    - `LLM_PROVIDER`
-   - `GROQ_API_KEY`
-   - `GROQ_MODEL`
+   - `OPENROUTER_API_KEY`
+   - `OPENROUTER_MODEL`
 5. Wait for the image build and startup to complete.
 6. Verify the public Space URL, `/api/summary`, and the chat UI.
 
@@ -197,10 +212,3 @@ Notes:
 - The README metadata block at the top sets `sdk: docker` and `app_port: 8000`, which Hugging Face uses for the Space configuration.
 - The app rebuilds `data/o2c_graph.db` from the bundled dataset when needed, so first startup can take a little longer.
 - Real API keys should stay in Space secrets or local `.env`, never in `.env.example`.
-
-## Submission Checklist
-
-- Deploy the app and capture a public demo link
-- Push the code to a public GitHub repository
-- Include AI session logs or transcripts
-- Include this README with architecture, database, prompting, and guardrails documented
