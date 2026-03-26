@@ -14,7 +14,6 @@ A FastAPI-based context graph system for the SAP order-to-cash dataset. It inges
 ## Links
 
 - Live demo: [https://jesha2-o2c-context-graph.hf.space/](https://jesha2-o2c-context-graph.hf.space/)
-- Public GitHub repository: add your repository URL here before submission
 
 ## Repository Layout
 
@@ -211,4 +210,3 @@ Notes:
 - The included `Dockerfile` already serves FastAPI on port `8000`.
 - The README metadata block at the top sets `sdk: docker` and `app_port: 8000`, which Hugging Face uses for the Space configuration.
 - The app rebuilds `data/o2c_graph.db` from the bundled dataset when needed, so first startup can take a little longer.
-- Real API keys should stay in Space secrets or local `.env`, never in `.env.example`.
